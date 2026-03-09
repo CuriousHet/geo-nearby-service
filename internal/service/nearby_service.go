@@ -16,7 +16,12 @@ func FindNearbyUsers(
 	
 	var nearby []models.User
 
+	minLat, maxLat, minLon, maxLon := geo.BoundingBox(myLat, myLon, radius)
+
 	for _, user := range users {
+		if user.Latitude < minLat || user.Latitude > maxLat || user.Longitude < minLon || user.Longitude > maxLon {
+			continue
+		}
 
 		distance := geo.Haversine(
 			myLat,
