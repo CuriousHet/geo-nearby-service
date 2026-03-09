@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Geo Nearby Debug</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body, html { margin: 0; padding: 0; }
+    #map { height: 100vh; width: 100%; }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<script>
+// query location (Ahmedabad)
+let lat = 23.0225;
+let lon = 72.5714;
+let radius = 500; // Let's use 500km so the box is visible within India
+
+// Parse URL params if any, e.g. ?radius=1000
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has('lat')) lat = parseFloat(urlParams.get('lat'));
+if (urlParams.has('lon')) lon = parseFloat(urlParams.get('lon'));
+if (urlParams.has('radius')) radius = parseFloat(urlParams.get('radius'));
+
+const map = L.map('map').setView([lat, lon], 5);
+
+L.tileLayer(
+  'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { attribution: 'Map data © OpenStreetMap contributors' }
+).addTo(map);
+
+// mark search center
+L.marker([lat, lon]).addTo(map)
+  .bindPopup("Search Center")
+  .openPopup();
+
+// draw search radius (Leaflet circle takes radius in meters)
+L.circle([lat, lon], {
+  radius: radius * 1000,
+  color: 'blue',
+  fillOpacity: 0.1
+}).addTo(map);
+
+// Calculate bounding box using the exact same formula as backend
+const latDelta = radius / 111.0;
+const lonDelta = radius / (111.0 * Math.cos(lat * Math.PI / 180));
+const minLat = lat - latDelta;
+const maxLat = lat + latDelta;
+const minLon = lon - lonDelta;
+const maxLon = lon + lonDelta;
+
+// draw bounding box
+L.rectangle([[minLat, minLon], [maxLat, maxLon]], {
+  color: 'red',
+  weight: 2,
+  fillColor: 'red',
+  fillOpacity: 0.05
+}).addTo(map);
+
+// First fetch all users to show the baseline and bounding box filtering
+fetch(`http://localhost:8080/users`)
+  .then(res => res.json())
+  .then(allUsers => {
+    
+    // Render all users
+    allUsers.forEach(user => {
+      // Check if user is inside the bounding box
+      const inBox = (user.Latitude >= minLat && user.Latitude <= maxLat && 
+                     user.Longitude >= minLon && user.Longitude <= maxLon);
+      
+      let color = 'gray'; // Fully excluded
+      let status = 'Outside Bounding Box (Skipped Haversine)';
+      
+      if (inBox) {
+        color = 'orange'; // Inside box but status will be overwritten if actually nearby
+        status = 'Inside Bounding Box (Filtered out by Haversine)';
+      }
+      
+      // We attach the marker to the user object so we can update it later
+      user.marker = L.circleMarker([user.Latitude, user.Longitude], {
+        radius: 6,
+        color: color,
+        fillColor: color,
+        fillOpacity: 0.8
+      }).addTo(map).bindPopup(`User ${user.ID} <br/> Status: ${status}`);
+    });
+    
+    // Now fetch the nearby users according to the backend
+    fetch(`http://localhost:8080/nearby?lat=${lat}&lon=${lon}&radius=${radius}`)
+      .then(res => res.json())
+      .then(users => {
+        if (!users) return;
+        
+        // Users returned by backend are confirmed to be within radius
+        const nearbyIds = new Set(users.map(u => u.ID));
+        
+        allUsers.forEach(user => {
+          if (nearbyIds.has(user.ID)) {
+            // Update marker for nearby users
+            user.marker.setStyle({
+              color: 'green',
+              fillColor: 'green'
+            });
+            user.marker.bindPopup(`User ${user.ID} <br/> Status: Nearby! (Inside Radius)`);
+          }
+        });
+      });
+  });
+
+</script>
+</body>
+</html>
