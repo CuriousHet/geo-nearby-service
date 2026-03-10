@@ -1,115 +1,267 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Geo Nearby Debug</title>
+  <title>Geo Nearby Debug Console</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    body, html { margin: 0; padding: 0; }
-    #map { height: 100vh; width: 100%; }
+    body, html { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f9; }
+    #map { height: 100vh; width: 100%; z-index: 1;}
+    
+    #panel {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 350px;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+      z-index: 1000;
+      backdrop-filter: blur(10px);
+    }
+
+    h2 { margin-top: 0; font-size: 1.2rem; color: #333; border-bottom: 2px solid #6366f1; padding-bottom: 8px;}
+    
+    .form-group { margin-bottom: 15px; }
+    label { display: block; font-weight: 600; margin-bottom: 5px; color: #555; font-size: 0.9rem;}
+    input[type="number"], input[type="range"] {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-sizing: border-box;
+      font-size: 0.95rem;
+    }
+    
+    .range-value { text-align: right; font-size: 0.85rem; color: #666; margin-top: 2px;}
+
+    button {
+      width: 100%;
+      padding: 10px;
+      background-color: #6366f1;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    button:hover { background-color: #4f46e5; }
+    
+    .legend {
+      margin-top: 20px;
+      font-size: 0.85rem;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .color-box {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      margin-right: 10px;
+    }
+    
+    .stats {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f8fafc;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+      font-size: 0.9rem;
+    }
+    .stat-val { font-weight: bold; color: #0f172a;}
   </style>
 </head>
 <body>
 
 <div id="map"></div>
 
+<div id="panel">
+  <h2>Geo-Spatial Query Settings</h2>
+  
+  <div class="form-group">
+    <label>Latitude</label>
+    <input type="number" id="inputLat" step="0.0001" value="23.0225">
+  </div>
+  
+  <div class="form-group">
+    <label>Longitude</label>
+    <input type="number" id="inputLon" step="0.0001" value="72.5714">
+  </div>
+  
+  <div class="form-group">
+    <label>Radius (km)</label>
+    <input type="range" id="inputRadius" min="1" max="1500" value="500" oninput="document.getElementById('radiusVal').innerText = this.value + ' km'">
+    <div class="range-value" id="radiusVal">500 km</div>
+  </div>
+
+  <button onclick="refreshMap()">Execute Query</button>
+
+  <div class="stats" id="statsPanel">
+    <div class="stat-row"><span>Total Users Database:</span> <span class="stat-val" id="statTotal">-</span></div>
+    <div class="stat-row"><span>Geohash Cells Indexed:</span> <span class="stat-val" id="statCells">-</span></div>
+    <div class="stat-row"><span>Users Found Nearby:</span> <span class="stat-val" id="statNearby">-</span></div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="color-box" style="background: rgba(0, 0, 255, 0.1); border: 1px solid blue;"></div> Target Haversine Radius</div>
+    <div class="legend-item"><div class="color-box" style="background: rgba(255, 0, 0, 0.05); border: 2px solid red;"></div> Initial Bounding Box Filter</div>
+    <div class="legend-item"><div class="color-box" style="background: rgba(128, 0, 128, 0.1); border: 2px solid purple;"></div> Geohash Index Grid Cells (O(1))</div>
+    <div style="margin-top: 10px; border-bottom: 1px solid #ccc;"></div>
+    <div class="legend-item" style="margin-top: 10px;"><div class="color-box" style="background: green;"></div> Verified Target User</div>
+    <div class="legend-item"><div class="color-box" style="background: orange;"></div> Within Bounds, Failed Haversine</div>
+    <div class="legend-item"><div class="color-box" style="background: gray;"></div> Excluded Early (Geohash/Bounds)</div>
+  </div>
+</div>
+
 <script>
-// query location (Ahmedabad)
-let lat = 23.0225;
-let lon = 72.5714;
-let radius = 500; // Let's use 500km so the box is visible within India
+let map;
+let layeredElements = L.layerGroup();
 
-// Parse URL params if any, e.g. ?radius=1000
-const urlParams = new URLSearchParams(window.location.search);
-if (urlParams.has('lat')) lat = parseFloat(urlParams.get('lat'));
-if (urlParams.has('lon')) lon = parseFloat(urlParams.get('lon'));
-if (urlParams.has('radius')) radius = parseFloat(urlParams.get('radius'));
+function initMap() {
+  map = L.map('map').setView([23.0225, 72.5714], 5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: 'Map data © OpenStreetMap contributors'
+  }).addTo(map);
+  
+  layeredElements.addTo(map);
 
-const map = L.map('map').setView([lat, lon], 5);
+  // Parse URL params for initial load if they exist
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('lat')) document.getElementById('inputLat').value = urlParams.get('lat');
+  if (urlParams.has('lon')) document.getElementById('inputLon').value = urlParams.get('lon');
+  if (urlParams.has('radius')) {
+    document.getElementById('inputRadius').value = urlParams.get('radius');
+    document.getElementById('radiusVal').innerText = urlParams.get('radius') + ' km';
+  }
 
-L.tileLayer(
-  'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  { attribution: 'Map data © OpenStreetMap contributors' }
-).addTo(map);
+  refreshMap();
+}
 
-// mark search center
-L.marker([lat, lon]).addTo(map)
-  .bindPopup("Search Center")
-  .openPopup();
+function refreshMap() {
+  layeredElements.clearLayers();
 
-// draw search radius (Leaflet circle takes radius in meters)
-L.circle([lat, lon], {
-  radius: radius * 1000,
-  color: 'blue',
-  fillOpacity: 0.1
-}).addTo(map);
+  const lat = parseFloat(document.getElementById('inputLat').value);
+  const lon = parseFloat(document.getElementById('inputLon').value);
+  const radius = parseFloat(document.getElementById('inputRadius').value);
 
-// Calculate bounding box using the exact same formula as backend
-const latDelta = radius / 111.0;
-const lonDelta = radius / (111.0 * Math.cos(lat * Math.PI / 180));
-const minLat = lat - latDelta;
-const maxLat = lat + latDelta;
-const minLon = lon - lonDelta;
-const maxLon = lon + lonDelta;
+  map.setView([lat, lon]);
 
-// draw bounding box
-L.rectangle([[minLat, minLon], [maxLat, maxLon]], {
-  color: 'red',
-  weight: 2,
-  fillColor: 'red',
-  fillOpacity: 0.05
-}).addTo(map);
+  // Search Center
+  L.marker([lat, lon]).addTo(layeredElements)
+    .bindPopup("<strong>Query Origin</strong><br/>Lat: " + lat + "<br/>Lon: " + lon);
 
-// First fetch all users to show the baseline and bounding box filtering
-fetch(`http://localhost:8080/users`)
-  .then(res => res.json())
-  .then(allUsers => {
-    
-    // Render all users
-    allUsers.forEach(user => {
-      // Check if user is inside the bounding box
-      const inBox = (user.Latitude >= minLat && user.Latitude <= maxLat && 
-                     user.Longitude >= minLon && user.Longitude <= maxLon);
+  // Target Radius Circle
+  L.circle([lat, lon], {
+    radius: radius * 1000,
+    color: 'blue',
+    fillOpacity: 0.1,
+    weight: 1
+  }).addTo(layeredElements);
+
+  // Bounding Box
+  const latDelta = radius / 111.0;
+  const lonDelta = radius / (111.0 * Math.cos(lat * Math.PI / 180));
+  const minLat = lat - latDelta;
+  const maxLat = lat + latDelta;
+  const minLon = lon - lonDelta;
+  const maxLon = lon + lonDelta;
+
+  L.rectangle([[minLat, minLon], [maxLat, maxLon]], {
+    color: 'red',
+    weight: 2,
+    fillColor: 'red',
+    fillOpacity: 0.05,
+    dashArray: '5, 5'
+  }).addTo(layeredElements);
+
+  fetchData(lat, lon, radius, minLat, maxLat, minLon, maxLon);
+}
+
+function fetchData(lat, lon, radius, minLat, maxLat, minLon, maxLon) {
+  fetch(`http://localhost:8080/users`)
+    .then(res => res.json())
+    .then(allUsers => {
+      document.getElementById('statTotal').innerText = allUsers.length;
       
-      let color = 'gray'; // Fully excluded
-      let status = 'Outside Bounding Box (Skipped Haversine)';
+      const userMarkers = {};
       
-      if (inBox) {
-        color = 'orange'; // Inside box but status will be overwritten if actually nearby
-        status = 'Inside Bounding Box (Filtered out by Haversine)';
-      }
-      
-      // We attach the marker to the user object so we can update it later
-      user.marker = L.circleMarker([user.Latitude, user.Longitude], {
-        radius: 6,
-        color: color,
-        fillColor: color,
-        fillOpacity: 0.8
-      }).addTo(map).bindPopup(`User ${user.ID} <br/> Status: ${status}`);
-    });
-    
-    // Now fetch the nearby users according to the backend
-    fetch(`http://localhost:8080/nearby?lat=${lat}&lon=${lon}&radius=${radius}`)
-      .then(res => res.json())
-      .then(users => {
-        if (!users) return;
+      allUsers.forEach(user => {
+        const inBox = (user.Latitude >= minLat && user.Latitude <= maxLat && 
+                       user.Longitude >= minLon && user.Longitude <= maxLon);
         
-        // Users returned by backend are confirmed to be within radius
-        const nearbyIds = new Set(users.map(u => u.ID));
+        let color = 'gray'; 
+        let status = 'Excluded (O(1) Geohash or Bounds Ignore)';
+        let radiusDisplay = 4;
         
-        allUsers.forEach(user => {
-          if (nearbyIds.has(user.ID)) {
-            // Update marker for nearby users
-            user.marker.setStyle({
-              color: 'green',
-              fillColor: 'green'
-            });
-            user.marker.bindPopup(`User ${user.ID} <br/> Status: Nearby! (Inside Radius)`);
-          }
-        });
+        if (inBox) {
+          color = 'orange';
+          status = 'Inside Bounds, Outside Circle (False Positive Candidate)';
+          radiusDisplay = 6;
+        }
+        
+        userMarkers[user.ID] = L.circleMarker([user.Latitude, user.Longitude], {
+          radius: radiusDisplay,
+          color: color,
+          fillColor: color,
+          fillOpacity: 0.8,
+          weight: 1
+        }).addTo(layeredElements).bindPopup(`<strong>User ${user.ID}</strong><br/>Status: ${status}`);
       });
-  });
+      
+      fetch(`http://localhost:8080/nearby?lat=${lat}&lon=${lon}&radius=${radius}`)
+        .then(res => res.json())
+        .then(data => {
+          if (!data) return;
+          
+          const users = data.users || [];
+          const grid = data.grid || [];
 
+          document.getElementById('statNearby').innerText = users.length;
+          document.getElementById('statCells').innerText = grid.length;
+
+          grid.forEach(box => {
+            L.rectangle([[box.min_lat, box.min_lon], [box.max_lat, box.max_lon]], {
+              color: 'purple',
+              weight: 2,
+              fillColor: 'purple',
+              fillOpacity: 0.08
+            }).addTo(layeredElements);
+          });
+
+          users.forEach(u => {
+            if (userMarkers[u.ID]) {
+              userMarkers[u.ID].setStyle({
+                color: 'green',
+                fillColor: 'green',
+                radius: 8,
+                weight: 2
+              });
+              userMarkers[u.ID].bindPopup(`<strong>User ${u.ID}</strong><br/><span style="color:green;">Status: Target Nearby Verified!</span>`);
+            }
+          });
+        });
+    });
+}
+
+// Map click changes origin coordinate
+map && map.on('click', function(e) {
+    document.getElementById('inputLat').value = e.latlng.lat.toFixed(4);
+    document.getElementById('inputLon').value = e.latlng.lng.toFixed(4);
+    refreshMap();
+});
+
+window.onload = initMap;
 </script>
 </body>
 </html>
