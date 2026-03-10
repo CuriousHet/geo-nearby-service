@@ -46,3 +46,5 @@ Filter users inside Bounding Box (cheap conditional)
   ↓
 Haversine calculation on remaining (expensive math)
 ```
+
+![alt text](image.png)
