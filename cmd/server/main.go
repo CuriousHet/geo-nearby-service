@@ -21,14 +21,14 @@ func main() {
 		lon, _ := strconv.ParseFloat(r.URL.Query().Get("lon"), 64)
 		radius, _ := strconv.ParseFloat(r.URL.Query().Get("radius"), 64)
 
-		users := service.FindNearbyUsers(
-			store.Users,
+		result := service.FindNearbyUsers(
+			store,
 			lat,
 			lon,
 			radius,
 		)
 
-		json.NewEncoder(w).Encode(users)
+		json.NewEncoder(w).Encode(result)
 	})
 
 	http.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
