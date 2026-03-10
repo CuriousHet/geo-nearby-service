@@ -2,10 +2,12 @@ package store
 
 import (
 	"github.com/CuriousHet/geo-nearby-service/internal/models"
+	"github.com/mmcloughlin/geohash"
 )
 
 type MemoryStore struct {
-	Users []models.User
+	Users        []models.User
+	GeohashIndex map[uint]map[string][]models.User
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -38,7 +40,17 @@ func NewMemoryStore() *MemoryStore {
 		{ID: 25, Latitude: 29.9457, Longitude: 78.1642},
 	}
 
+	index := make(map[uint]map[string][]models.User)
+	for p := uint(1); p <= 6; p++ {
+		index[p] = make(map[string][]models.User)
+		for _, u := range users {
+			hash := geohash.EncodeWithPrecision(u.Latitude, u.Longitude, p)
+			index[p][hash] = append(index[p][hash], u)
+		}
+	}
+
 	return &MemoryStore{
-		Users: users,
+		Users:        users,
+		GeohashIndex: index,
 	}
 }
