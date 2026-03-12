@@ -105,12 +105,24 @@
     <div class="range-value" id="radiusVal">500 km</div>
   </div>
 
+  <div class="form-group">
+    <label>Algorithm Phase Benchmark</label>
+    <select id="inputAlgorithm" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95rem;">
+      <option value="naive">Phase 1: Naive Haversine (O(N))</option>
+      <option value="bounding_box">Phase 2: Bounding Box Filter (O(N))</option>
+      <option value="geohash" selected>Phase 3: Geohash Grid (O(1))</option>
+    </select>
+  </div>
+
   <button onclick="refreshMap()">Execute Query</button>
 
   <div class="stats" id="statsPanel">
     <div class="stat-row"><span>Total Users Database:</span> <span class="stat-val" id="statTotal">-</span></div>
     <div class="stat-row"><span>Geohash Cells Indexed:</span> <span class="stat-val" id="statCells">-</span></div>
     <div class="stat-row"><span>Users Found Nearby:</span> <span class="stat-val" id="statNearby">-</span></div>
+    <div class="stat-row"><span>Geohash Time:</span> <span class="stat-val" id="statGeohashTime" style="color:#10b981;">-</span></div>
+    <div class="stat-row"><span>Bounding Box Time:</span> <span class="stat-val" id="statBBoxTime" style="color:#f59e0b;">-</span></div>
+    <div class="stat-row"><span>Haversine Time:</span> <span class="stat-val" id="statHavTime" style="color:#ef4444;">-</span></div>
   </div>
 
   <div class="legend">
@@ -154,6 +166,7 @@ function refreshMap() {
   const lat = parseFloat(document.getElementById('inputLat').value);
   const lon = parseFloat(document.getElementById('inputLon').value);
   const radius = parseFloat(document.getElementById('inputRadius').value);
+  const algorithm = document.getElementById('inputAlgorithm').value;
 
   map.setView([lat, lon]);
 
@@ -185,73 +198,47 @@ function refreshMap() {
     dashArray: '5, 5'
   }).addTo(layeredElements);
 
-  fetchData(lat, lon, radius, minLat, maxLat, minLon, maxLon);
+  fetchData(lat, lon, radius, minLat, maxLat, minLon, maxLon, algorithm);
 }
 
-function fetchData(lat, lon, radius, minLat, maxLat, minLon, maxLon) {
-  fetch(`http://localhost:8080/users`)
+function fetchData(lat, lon, radius, minLat, maxLat, minLon, maxLon, algorithm) {
+  fetch(`http://localhost:8080/nearby?lat=${lat}&lon=${lon}&radius=${radius}&algorithm=${algorithm}`)
     .then(res => res.json())
-    .then(allUsers => {
-      document.getElementById('statTotal').innerText = allUsers.length;
+    .then(data => {
+      if (!data) return;
       
-      const userMarkers = {};
-      
-      allUsers.forEach(user => {
-        const inBox = (user.Latitude >= minLat && user.Latitude <= maxLat && 
-                       user.Longitude >= minLon && user.Longitude <= maxLon);
-        
-        let color = 'gray'; 
-        let status = 'Excluded (O(1) Geohash or Bounds Ignore)';
-        let radiusDisplay = 4;
-        
-        if (inBox) {
-          color = 'orange';
-          status = 'Inside Bounds, Outside Circle (False Positive Candidate)';
-          radiusDisplay = 6;
-        }
-        
-        userMarkers[user.ID] = L.circleMarker([user.Latitude, user.Longitude], {
-          radius: radiusDisplay,
-          color: color,
-          fillColor: color,
-          fillOpacity: 0.8,
-          weight: 1
-        }).addTo(layeredElements).bindPopup(`<strong>User ${user.ID}</strong><br/>Status: ${status}`);
+      const users = data.users || [];
+      const grid = data.grid || [];
+      const totalDB = data.total_db_size || 0;
+      const timing = data.timing || {};
+
+      document.getElementById('statTotal').innerText = totalDB.toLocaleString();
+      document.getElementById('statNearby').innerText = users.length.toLocaleString();
+      document.getElementById('statCells').innerText = grid.length;
+      document.getElementById('statGeohashTime').innerText = timing.geohash_time || '-';
+      document.getElementById('statBBoxTime').innerText = timing.bounding_box_time || '-';
+      document.getElementById('statHavTime').innerText = timing.haversine_time || '-';
+
+      grid.forEach(box => {
+        L.rectangle([[box.min_lat, box.min_lon], [box.max_lat, box.max_lon]], {
+          color: 'purple',
+          weight: 2,
+          fillColor: 'purple',
+          fillOpacity: 0.08
+        }).addTo(layeredElements);
       });
-      
-      fetch(`http://localhost:8080/nearby?lat=${lat}&lon=${lon}&radius=${radius}`)
-        .then(res => res.json())
-        .then(data => {
-          if (!data) return;
-          
-          const users = data.users || [];
-          const grid = data.grid || [];
 
-          document.getElementById('statNearby').innerText = users.length;
-          document.getElementById('statCells').innerText = grid.length;
-
-          grid.forEach(box => {
-            L.rectangle([[box.min_lat, box.min_lon], [box.max_lat, box.max_lon]], {
-              color: 'purple',
-              weight: 2,
-              fillColor: 'purple',
-              fillOpacity: 0.08
-            }).addTo(layeredElements);
-          });
-
-          users.forEach(u => {
-            if (userMarkers[u.ID]) {
-              userMarkers[u.ID].setStyle({
-                color: 'green',
-                fillColor: 'green',
-                radius: 8,
-                weight: 2
-              });
-              userMarkers[u.ID].bindPopup(`<strong>User ${u.ID}</strong><br/><span style="color:green;">Status: Target Nearby Verified!</span>`);
-            }
-          });
-        });
-    });
+      users.forEach(u => {
+        L.circleMarker([u.Latitude, u.Longitude], {
+          radius: 8,
+          color: 'green',
+          fillColor: 'green',
+          fillOpacity: 0.8,
+          weight: 2
+        }).addTo(layeredElements).bindPopup(`<strong>User ${u.ID}</strong><br/><span style="color:green;">Status: Target Nearby Verified!</span>`);
+      });
+    })
+    .catch(err => console.error("Error fetching nearby data:", err));
 }
 
 // Map click changes origin coordinate
