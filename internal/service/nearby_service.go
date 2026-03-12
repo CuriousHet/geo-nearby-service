@@ -1,6 +1,9 @@
 package service
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/CuriousHet/geo-nearby-service/internal/geo"
 	"github.com/CuriousHet/geo-nearby-service/internal/models"
 	"github.com/CuriousHet/geo-nearby-service/internal/store"
@@ -14,9 +17,17 @@ type GeoBounds struct {
 	MaxLon float64 `json:"max_lon"`
 }
 
+type TimingStats struct {
+	GeohashTime     string `json:"geohash_time"`
+	BoundingBoxTime string `json:"bounding_box_time"`
+	HaversineTime   string `json:"haversine_time"`
+}
+
 type NearbyResult struct {
-	Users []models.User `json:"users"`
-	Grid  []GeoBounds   `json:"grid"`
+	Users       []models.User `json:"users"`
+	Grid        []GeoBounds   `json:"grid"`
+	TotalDBSize int           `json:"total_db_size"`
+	Timing      TimingStats   `json:"timing"`
 }
 
 func getPrecisionForRadius(radiusKm float64) uint {
@@ -51,12 +62,8 @@ func getPrecisionForRadius(radiusKm float64) uint {
 	return 1
 }
 
-func FindNearbyUsers(
-	storeInstance *store.MemoryStore,
-	myLat float64,
-	myLon float64,
-	radius float64,
-) NearbyResult {
+func getGeohashCandidatesPhase(storeInstance *store.MemoryStore, myLat float64, myLon float64, radius float64) ([]models.User, []GeoBounds, string) {
+	startTime := time.Now()
 
 	precision := getPrecisionForRadius(radius)
 	centerHash := geohash.EncodeWithPrecision(myLat, myLon, precision)
@@ -91,14 +98,30 @@ func FindNearbyUsers(
 		}
 	}
 
-	var nearby []models.User
+	duration := fmt.Sprintf("%.4f ms", time.Since(startTime).Seconds()*1000.0)
+	return candidates, grid, duration
+}
+
+func filterByBoundingBoxPhase(candidates []models.User, myLat float64, myLon float64, radius float64) ([]models.User, string) {
+	startTime := time.Now()
+	var bboxCandidates []models.User
 	minLat, maxLat, minLon, maxLon := geo.BoundingBox(myLat, myLon, radius)
 
 	for _, user := range candidates {
 		if user.Latitude < minLat || user.Latitude > maxLat || user.Longitude < minLon || user.Longitude > maxLon {
 			continue
 		}
+		bboxCandidates = append(bboxCandidates, user)
+	}
 
+	duration := fmt.Sprintf("%.4f ms", time.Since(startTime).Seconds()*1000.0)
+	return bboxCandidates, duration
+}
+
+func filterByHaversinePhase(candidates []models.User, myLat float64, myLon float64, radius float64) ([]models.User, string) {
+	startTime := time.Now()
+	var nearby []models.User
+	for _, user := range candidates {
 		distance := geo.Haversine(
 			myLat,
 			myLon,
@@ -115,8 +138,76 @@ func FindNearbyUsers(
 		nearby = []models.User{}
 	}
 
-	return NearbyResult{
-		Users: nearby,
-		Grid:  grid,
+	duration := fmt.Sprintf("%.4f ms", time.Since(startTime).Seconds()*1000.0)
+	return nearby, duration
+}
+
+func FindNearbyUsers(
+	storeInstance *store.MemoryStore,
+	myLat float64,
+	myLon float64,
+	radius float64,
+	algorithm string,
+) NearbyResult {
+
+	var candidates []models.User
+	var grid []GeoBounds
+	var geohashDuration, bboxDuration, havDuration string
+
+	if algorithm == "naive" {
+		// Phase 1: Pure Haversine O(N) over entire DB
+		candidates = storeInstance.Users
+		nearby, dur := filterByHaversinePhase(candidates, myLat, myLon, radius)
+		havDuration = dur
+		
+		return NearbyResult{
+			Users:       nearby,
+			Grid:        []GeoBounds{},
+			TotalDBSize: len(storeInstance.Users),
+			Timing: TimingStats{
+				GeohashTime:     "-",
+				BoundingBoxTime: "-",
+				HaversineTime:   havDuration,
+			},
+		}
+	} else if algorithm == "bounding_box" {
+		// Phase 2: Bounding Box O(N) over entire DB, then Haversine
+		candidates = storeInstance.Users
+		bboxCandidates, dur1 := filterByBoundingBoxPhase(candidates, myLat, myLon, radius)
+		bboxDuration = dur1
+		
+		nearby, dur2 := filterByHaversinePhase(bboxCandidates, myLat, myLon, radius)
+		havDuration = dur2
+		
+		return NearbyResult{
+			Users:       nearby,
+			Grid:        []GeoBounds{},
+			TotalDBSize: len(storeInstance.Users),
+			Timing: TimingStats{
+				GeohashTime:     "-",
+				BoundingBoxTime: bboxDuration,
+				HaversineTime:   havDuration,
+			},
+		}
+	} else {
+		// Phase 3: Geohash O(1), then Bounding Box O(K), then Haversine O(M)
+		// This is the default 'geohash' strategy
+		candidates, grid, geohashDuration = getGeohashCandidatesPhase(storeInstance, myLat, myLon, radius)
+		bboxCandidates, dur1 := filterByBoundingBoxPhase(candidates, myLat, myLon, radius)
+		bboxDuration = dur1
+		
+		nearby, dur2 := filterByHaversinePhase(bboxCandidates, myLat, myLon, radius)
+		havDuration = dur2
+		
+		return NearbyResult{
+			Users:       nearby,
+			Grid:        grid,
+			TotalDBSize: len(storeInstance.Users),
+			Timing: TimingStats{
+				GeohashTime:     geohashDuration,
+				BoundingBoxTime: bboxDuration,
+				HaversineTime:   havDuration,
+			},
+		}
 	}
 }
