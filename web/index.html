@@ -110,7 +110,8 @@
     <select id="inputAlgorithm" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95rem;">
       <option value="naive">Phase 1: Naive Haversine (O(N))</option>
       <option value="bounding_box">Phase 2: Bounding Box Filter (O(N))</option>
-      <option value="geohash" selected>Phase 3: Geohash Grid (O(1))</option>
+      <option value="geohash">Phase 3: Geohash Grid (O(1))</option>
+      <option value="s2" selected>Phase 4: Google S2 (Hierarchical O(1))</option>
     </select>
   </div>
 
@@ -121,6 +122,7 @@
     <div class="stat-row"><span>Geohash Cells Indexed:</span> <span class="stat-val" id="statCells">-</span></div>
     <div class="stat-row"><span>Users Found Nearby:</span> <span class="stat-val" id="statNearby">-</span></div>
     <div class="stat-row"><span>Geohash Time:</span> <span class="stat-val" id="statGeohashTime" style="color:#10b981;">-</span></div>
+    <div class="stat-row"><span>Google S2 Time:</span> <span class="stat-val" id="statS2Time" style="color:#8b5cf6;">-</span></div>
     <div class="stat-row"><span>Bounding Box Time:</span> <span class="stat-val" id="statBBoxTime" style="color:#f59e0b;">-</span></div>
     <div class="stat-row"><span>Haversine Time:</span> <span class="stat-val" id="statHavTime" style="color:#ef4444;">-</span></div>
   </div>
@@ -129,6 +131,7 @@
     <div class="legend-item"><div class="color-box" style="background: rgba(0, 0, 255, 0.1); border: 1px solid blue;"></div> Target Haversine Radius</div>
     <div class="legend-item"><div class="color-box" style="background: rgba(255, 0, 0, 0.05); border: 2px solid red;"></div> Initial Bounding Box Filter</div>
     <div class="legend-item"><div class="color-box" style="background: rgba(128, 0, 128, 0.1); border: 2px solid purple;"></div> Geohash Index Grid Cells (O(1))</div>
+    <div class="legend-item"><div class="color-box" style="background: rgba(79, 70, 229, 0.15); border: 2px solid #4f46e5;"></div> Google S2 Cell Polygons (O(1))</div>
     <div style="margin-top: 10px; border-bottom: 1px solid #ccc;"></div>
     <div class="legend-item" style="margin-top: 10px;"><div class="color-box" style="background: green;"></div> Verified Target User</div>
     <div class="legend-item"><div class="color-box" style="background: orange;"></div> Within Bounds, Failed Haversine</div>
@@ -216,6 +219,7 @@ function fetchData(lat, lon, radius, minLat, maxLat, minLon, maxLon, algorithm) 
       document.getElementById('statNearby').innerText = users.length.toLocaleString();
       document.getElementById('statCells').innerText = grid.length;
       document.getElementById('statGeohashTime').innerText = timing.geohash_time || '-';
+      document.getElementById('statS2Time').innerText = timing.s2_time || '-';
       document.getElementById('statBBoxTime').innerText = timing.bounding_box_time || '-';
       document.getElementById('statHavTime').innerText = timing.haversine_time || '-';
 
@@ -225,6 +229,17 @@ function fetchData(lat, lon, radius, minLat, maxLat, minLon, maxLon, algorithm) 
           weight: 2,
           fillColor: 'purple',
           fillOpacity: 0.08
+        }).addTo(layeredElements);
+      });
+
+      const polygons = data.polygons || [];
+      polygons.forEach(poly => {
+        const leafletCoords = poly.map(p => [p.lat, p.lon]);
+        L.polygon(leafletCoords, {
+          color: '#4f46e5',
+          weight: 2,
+          fillColor: '#4f46e5',
+          fillOpacity: 0.15
         }).addTo(layeredElements);
       });
 
