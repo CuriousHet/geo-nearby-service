@@ -19,15 +19,17 @@ type GeoBounds struct {
 
 type TimingStats struct {
 	GeohashTime     string `json:"geohash_time"`
+	S2Time          string `json:"s2_time"`
 	BoundingBoxTime string `json:"bounding_box_time"`
 	HaversineTime   string `json:"haversine_time"`
 }
 
 type NearbyResult struct {
-	Users       []models.User `json:"users"`
-	Grid        []GeoBounds   `json:"grid"`
-	TotalDBSize int           `json:"total_db_size"`
-	Timing      TimingStats   `json:"timing"`
+	Users       []models.User  `json:"users"`
+	Grid        []GeoBounds    `json:"grid"`     // For Geohash (rectangles)
+	Polygons    [][]models.Point `json:"polygons"` // For S2 (true cell geometry)
+	TotalDBSize int            `json:"total_db_size"`
+	Timing      TimingStats    `json:"timing"`
 }
 
 func getPrecisionForRadius(radiusKm float64) uint {
@@ -60,6 +62,38 @@ func getPrecisionForRadius(radiusKm float64) uint {
 		return 2
 	}
 	return 1
+}
+
+func getS2CandidatesPhase(storeInstance *store.MemoryStore, myLat float64, myLon float64, radius float64) ([]models.User, [][]models.Point, string) {
+	startTime := time.Now()
+
+	// Choose appropriate S2 level based on radius
+	level := geo.GetS2LevelForRadius(radius)
+
+	// Get the cells that cover our search circle at this level
+	covering := geo.GetS2CoveringCells(myLat, myLon, radius, level)
+	
+	var candidates []models.User
+	var polygons [][]models.Point
+
+	if indexAtLevel, ok := storeInstance.S2Index[level]; ok {
+		for _, cellID := range covering {
+			if users, ok := indexAtLevel[cellID]; ok {
+				candidates = append(candidates, users...)
+			}
+
+			// Prepare polygons for visualization
+			vertices := geo.GetS2CellPolygon(cellID)
+			poly := make([]models.Point, len(vertices))
+			for i, v := range vertices {
+				poly[i] = models.Point{Lat: v[0], Lon: v[1]}
+			}
+			polygons = append(polygons, poly)
+		}
+	}
+
+	duration := fmt.Sprintf("%.4f ms", time.Since(startTime).Seconds()*1000.0)
+	return candidates, polygons, duration
 }
 
 func getGeohashCandidatesPhase(storeInstance *store.MemoryStore, myLat float64, myLon float64, radius float64) ([]models.User, []GeoBounds, string) {
@@ -152,7 +186,13 @@ func FindNearbyUsers(
 
 	var candidates []models.User
 	var grid []GeoBounds
-	var geohashDuration, bboxDuration, havDuration string
+	polygons := [][]models.Point{}
+	var geohashDuration, s2Duration, bboxDuration, havDuration string
+
+	geohashDuration = "-"
+	s2Duration = "-"
+	bboxDuration = "-"
+	havDuration = "-"
 
 	if algorithm == "naive" {
 		// Phase 1: Pure Haversine O(N) over entire DB
@@ -165,8 +205,9 @@ func FindNearbyUsers(
 			Grid:        []GeoBounds{},
 			TotalDBSize: len(storeInstance.Users),
 			Timing: TimingStats{
-				GeohashTime:     "-",
-				BoundingBoxTime: "-",
+				GeohashTime:     geohashDuration,
+				S2Time:          s2Duration,
+				BoundingBoxTime: bboxDuration,
 				HaversineTime:   havDuration,
 			},
 		}
@@ -184,14 +225,35 @@ func FindNearbyUsers(
 			Grid:        []GeoBounds{},
 			TotalDBSize: len(storeInstance.Users),
 			Timing: TimingStats{
-				GeohashTime:     "-",
+				GeohashTime:     geohashDuration,
+				S2Time:          s2Duration,
+				BoundingBoxTime: bboxDuration,
+				HaversineTime:   havDuration,
+			},
+		}
+	} else if algorithm == "s2" {
+		// Phase 4: Google S2 O(1), then Bounding Box O(K), then Haversine O(M)
+		candidates, polygons, s2Duration = getS2CandidatesPhase(storeInstance, myLat, myLon, radius)
+		bboxCandidates, dur1 := filterByBoundingBoxPhase(candidates, myLat, myLon, radius)
+		bboxDuration = dur1
+		
+		nearby, dur2 := filterByHaversinePhase(bboxCandidates, myLat, myLon, radius)
+		havDuration = dur2
+		
+		return NearbyResult{
+			Users:       nearby,
+			Grid:        []GeoBounds{},
+			Polygons:    polygons,
+			TotalDBSize: len(storeInstance.Users),
+			Timing: TimingStats{
+				GeohashTime:     geohashDuration,
+				S2Time:          s2Duration,
 				BoundingBoxTime: bboxDuration,
 				HaversineTime:   havDuration,
 			},
 		}
 	} else {
 		// Phase 3: Geohash O(1), then Bounding Box O(K), then Haversine O(M)
-		// This is the default 'geohash' strategy
 		candidates, grid, geohashDuration = getGeohashCandidatesPhase(storeInstance, myLat, myLon, radius)
 		bboxCandidates, dur1 := filterByBoundingBoxPhase(candidates, myLat, myLon, radius)
 		bboxDuration = dur1
@@ -202,9 +264,11 @@ func FindNearbyUsers(
 		return NearbyResult{
 			Users:       nearby,
 			Grid:        grid,
+			Polygons:    polygons,
 			TotalDBSize: len(storeInstance.Users),
 			Timing: TimingStats{
 				GeohashTime:     geohashDuration,
+				S2Time:          s2Duration,
 				BoundingBoxTime: bboxDuration,
 				HaversineTime:   havDuration,
 			},
