@@ -3,13 +3,16 @@ package store
 import (
 	"math/rand"
 
+	"github.com/CuriousHet/geo-nearby-service/internal/geo"
 	"github.com/CuriousHet/geo-nearby-service/internal/models"
+	"github.com/golang/geo/s2"
 	"github.com/mmcloughlin/geohash"
 )
 
 type MemoryStore struct {
 	Users        []models.User
 	GeohashIndex map[uint]map[string][]models.User
+	S2Index      map[int]map[s2.CellID][]models.User
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -30,21 +33,35 @@ func NewMemoryStore() *MemoryStore {
 		})
 	}
 
-	index := make(map[uint]map[string][]models.User)
+	ghIndex := make(map[uint]map[string][]models.User)
 	for p := uint(1); p <= 6; p++ {
-		index[p] = make(map[string][]models.User)
+		ghIndex[p] = make(map[string][]models.User)
+	}
+
+	s2Index := make(map[int]map[s2.CellID][]models.User)
+	// We'll index from Level 3 (~700km) to Level 13 (~800m)
+	for lv := 3; lv <= 13; lv++ {
+		s2Index[lv] = make(map[s2.CellID][]models.User)
 	}
 
 	// Index all 100,000 users
 	for _, u := range users {
+		// Populate Geohash Index
 		for p := uint(1); p <= 6; p++ {
 			hash := geohash.EncodeWithPrecision(u.Latitude, u.Longitude, p)
-			index[p][hash] = append(index[p][hash], u)
+			ghIndex[p][hash] = append(ghIndex[p][hash], u)
+		}
+
+		// Populate S2 Index for each level
+		for lv := 3; lv <= 13; lv++ {
+			cellID := geo.LatLonToS2CellID(u.Latitude, u.Longitude, lv)
+			s2Index[lv][cellID] = append(s2Index[lv][cellID], u)
 		}
 	}
 
 	return &MemoryStore{
 		Users:        users,
-		GeohashIndex: index,
+		GeohashIndex: ghIndex,
+		S2Index:      s2Index,
 	}
 }
