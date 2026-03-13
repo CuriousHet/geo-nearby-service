@@ -1,2 +1,4 @@
+github.com/golang/geo v0.0.0-20260302211937-87f5a40ea07a h1:7f/cr+n7Jtd7mzCLrx47sdVIGabpSSxCHrf6fJczDp0=
+github.com/golang/geo v0.0.0-20260302211937-87f5a40ea07a/go.mod h1:Mymr9kRGDc64JPr03TSZmuIBODZ3KyswLzm1xL0HFA8=
 github.com/mmcloughlin/geohash v0.10.0 h1:9w1HchfDfdeLc+jFEf/04D27KP7E2QmpDu52wPbJWRE=
 github.com/mmcloughlin/geohash v0.10.0/go.mod h1:oNZxQo5yWJh0eMQEP/8hwQuVx9Z9tjwFUqcTB1SmG0c=
