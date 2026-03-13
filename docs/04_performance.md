@@ -8,6 +8,7 @@ To measure the true efficiency of our $O(1)$ Geohash index, we added localized s
 ```json
 {
   "timing": {
+    "s2_time": "0.1250 ms",
     "geohash_time": "0.4512 ms",
     "bounding_box_time": "0.0210 ms",
     "haversine_time": "0.0034 ms"
